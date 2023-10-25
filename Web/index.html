@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="cn">
+<head>
+    <meta charset="UTF-8">
+    <title>MCWeb Console</title>
+
+    <!-- 测试环境 -->
+    <!-- bundle.js -->
+    <!--    <script src="./dist/bundle.js"></script>-->
+
+    <script src="src/js/jquery.js"></script>
+    <script src="src/js/xterm.js"></script>
+    <script src="src/js/bootstrap.js"></script>
+    <script src="src/js/crypto-js.js"></script>
+
+    <script src="src/js/WsMessageData.js"></script>
+    <script src="src/js/WsMessage.js"></script>
+
+    <link rel="stylesheet" type="text/css" href="src/css/bootstrap.css">
+    <link rel="stylesheet" type="text/css" href="src/css/xterm.css">
+
+    <style>
+
+        .card-body {
+            height: 80vh;
+        }
+
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="card mt-4">
+        <div class="card-body">
+            <div id="terminal"></div>
+        </div>
+    </div>
+</div>
+<script type="module">
+
+    const terminalContainer = document.getElementById('terminal');
+    const term = new Terminal({
+        cursorStyle: 'underline', //光标样式
+        cursorBlink: true, // 光标闪烁
+        convertEol: true, //启用时，光标将设置为下一行的开头
+        disableStdin: false, //是否应禁用输入。
+        theme: {
+            foreground: 'white', //字体
+            background: '#060101', //背景色
+            cursor: 'help',//设置光标
+        }
+    });
+    term.str = ''; //'[MC]:';
+    term.status = 'outline';
+    term.inputBuffer = '';
+    term.open(terminalContainer);
+
+    function runFakeTerminal() {
+        if (term._initialized) {
+            return;
+        }
+
+        term._initialized = true;
+
+        // 换行
+        term.prompt = () => {
+            term.write('\r\n' + term.str);
+        };
+
+        term.writeln('Welcome to Null Atom Web Console');
+        //term.prompt(term);
+        connect();
+        term.onKey(e => {
+                const printable = !e.altKey && !e.ctrlKey && !e.metaKey;
+                if (e.domEvent.keyCode === 13) {
+                    // 按下回车的事件
+                    term.put();
+                    //console.log(term.inputBuffer);
+                } else if (e.domEvent.keyCode === 8) {
+                    // 不删除前缀
+                    if (term._core.buffer.x > term.str.length) {
+                        term.inputBuffer = term.inputBuffer.slice(0, -1);
+                        term.write('\b \b');
+                    }
+                } else if (printable) {
+                    term.inputBuffer += e.key;
+                    term.write(e.key);
+                }
+                //console.log(e.key);
+            }
+        );
+    }
+
+    runFakeTerminal();
+
+    function connect(times = 0) {
+        times++;
+        if (times >= 10) {
+            // 防止无限递归爆栈
+            // TODO 错误处理
+            return;
+        }
+        term.writeln('\r\nConnection interruption, please try again.');
+        term.status = 'connection';
+        term.writeln('Please enter your server address and password:');
+        term.writeln(' Formation: domain:port password');
+        term.writeln(' For example: mc.atom-craft.com:8080 5201314');
+        term.inputBuffer = '';
+        term.put = () => {
+            // 开始建立websocket
+            term.writeln('');
+            [term.address, term.password] = term.inputBuffer.split(' ');
+            term.inputBuffer = '';
+            term.socket = new WebSocket('ws://' + term.address, [CryptoJS.MD5(term.password)]);
+
+            //服务器关闭事件
+            term.socket.addEventListener('close', (event) => {
+                //
+                term.status = 'outline';
+                console.log('WS: Connection closed')
+                connect(times);
+            })
+
+            // 处理连接成功事件
+            term.socket.addEventListener('open', (event) => {
+                term.writeln('Connection established successfully.');
+                term.status = 'online';
+                term.prompt();
+            });
+
+            // 处理消息事件
+            term.socket.addEventListener('message', (event) => {
+                // 在这里处理从服务器接收到的输出
+                console.log('WS msg:', event.data);
+                let message = new WsMessage();
+                if (!message.create(event.data)) {
+                    return;
+                }
+                switch (message.getType()) {
+                    // MC服务器输出
+                    case 'stdout':
+                        term.write(message.getData().stdout.join(''));
+                        return;
+                    default:
+                        break;
+                }
+            });
+
+            // 提交事件
+            term.put = () => {
+                let message = new WsMessage();
+                // TODO 完整的命令
+                if (term.inputBuffer === 'restart') {
+                    term.socket.send(message.getMessageAsJson('operation', {
+                        cmd: term.inputBuffer
+                    }));
+                } else {
+                    term.socket.send(message.getMessageAsJson('cmd', {
+                        cmd: [
+                            term.inputBuffer
+                        ]
+                    }));
+                }
+                term.inputBuffer = '';
+                term.prompt();
+            }
+        };
+    }
+
+</script>
+
+
+</body>
+</html>
